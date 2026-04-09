@@ -297,7 +297,21 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from transformer.transformer import TransformerBlock
+    block = TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=max_seq_len, theta=theta)
+    remapped = {
+        "norm1.g": weights["ln1.weight"],
+        "norm2.g": weights["ln2.weight"],
+        "CausalMHA.Wq.weights": weights["attn.q_proj.weight"],
+        "CausalMHA.Wk.weights": weights["attn.k_proj.weight"],
+        "CausalMHA.Wv.weights": weights["attn.v_proj.weight"],
+        "CausalMHA.Wo.weights": weights["attn.output_proj.weight"],
+        "FFN.w1.weights": weights["ffn.w1.weight"],
+        "FFN.w2.weights": weights["ffn.w2.weight"],
+        "FFN.w3.weights": weights["ffn.w3.weight"],
+    }
+    block.load_state_dict(remapped, strict=False)
+    return block(in_features)
 
 
 def run_transformer_lm(
@@ -379,7 +393,32 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from transformer.transformer import EntireTransformer
+    model = EntireTransformer(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=rope_theta,
+    )
+    remapped = {}
+    remapped["token_embeddings.embedding_weights"] = weights["token_embeddings.weight"]
+    remapped["norm.g"] = weights["ln_final.weight"]
+    remapped["linear.weights"] = weights["lm_head.weight"]
+    for i in range(num_layers):
+        remapped[f"layers.{i}.CausalMHA.Wq.weights"] = weights[f"layers.{i}.attn.q_proj.weight"]
+        remapped[f"layers.{i}.CausalMHA.Wk.weights"] = weights[f"layers.{i}.attn.k_proj.weight"]
+        remapped[f"layers.{i}.CausalMHA.Wv.weights"] = weights[f"layers.{i}.attn.v_proj.weight"]
+        remapped[f"layers.{i}.CausalMHA.Wo.weights"] = weights[f"layers.{i}.attn.output_proj.weight"]
+        remapped[f"layers.{i}.norm1.g"] = weights[f"layers.{i}.ln1.weight"]
+        remapped[f"layers.{i}.norm2.g"] = weights[f"layers.{i}.ln2.weight"]
+        remapped[f"layers.{i}.FFN.w1.weights"] = weights[f"layers.{i}.ffn.w1.weight"]
+        remapped[f"layers.{i}.FFN.w2.weights"] = weights[f"layers.{i}.ffn.w2.weight"]
+        remapped[f"layers.{i}.FFN.w3.weights"] = weights[f"layers.{i}.ffn.w3.weight"]
+    model.load_state_dict(remapped, strict=False)
+    return model(in_indices)
 
 
 def run_rmsnorm(

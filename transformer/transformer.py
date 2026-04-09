@@ -4,6 +4,7 @@ import math
 from typing import Optional
 from einops import rearrange, einsum
 from transformer.linear import Linear
+from transformer.embedding import Embedding
 
 # Implementing section 3.4
 
@@ -160,6 +161,53 @@ class CausalMHA(torch.nn.Module):
 
         return output
         
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, eps=1e-5, device=None,
+    dtype=None, max_seq_len=None, theta=None):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.norm1 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
+        self.norm2 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
+        self.CausalMHA = CausalMHA(d_model = d_model, num_heads = num_heads, max_seq_len = max_seq_len, theta=theta, device=device, dtype=dtype)
+        self.FFN = FFN(d_model, d_ff, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor):
+        # Remember that the two norms have different gain parameters so instantiate two of them
+        z = x + self.CausalMHA(self.norm1(x))
+        y = z + self.FFN(self.norm2(z))
+        return y
+
+        
+class EntireTransformer(torch.nn.Module):
+    def __init__(self, vocab_size: int, context_length: int, num_layers: int,
+    d_model: int, num_heads: int, d_ff: int, theta: float,
+    device=None, dtype=None):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.num_layers = num_layers
+        self.token_embeddings = Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=dtype)
+        self.norm = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.linear = Linear(d_model, vocab_size, device=device, dtype=dtype)
+        self.layers = nn.ModuleList([TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=context_length, theta=theta, device=device, dtype=dtype) for _ in range(num_layers)])
+
+    def forward(self, x: torch.Tensor):
+        # Token Embedding
+        x = self.token_embeddings(x)
+        # num_layers transformer blocks
+        for layer in self.layers:
+            x = layer(x)
+        
+        x = self.norm(x)
+        x= self.linear(x)
+        return x
+
+
+
+
 
 
 
