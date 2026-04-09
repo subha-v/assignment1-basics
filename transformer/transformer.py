@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from typing import Optional
 from einops import rearrange, einsum
 from transformer.linear import Linear
 
@@ -82,3 +83,83 @@ class RotaryPositionalEmbedding(nn.Module):
         result = rearrange(stacked, "... d_k_half two -> ... (d_k_half two)", two=2)
         return result
     
+def softmax(x, dim=-1):
+    max_val = torch.amax(x, dim=dim, keepdim = True)
+    total_sum = torch.sum(torch.exp(x - max_val), dim=dim, keepdim = True)
+    return torch.exp(x - max_val) / total_sum
+
+# 3.4.4 Scaled Dot Prod Attention
+def scaled_dot_product_attention(q: torch.Tensor, k: torch.tensor, v: torch.tensor, mask: Optional[torch.Tensor]=None) -> torch.Tensor:
+    qk = einsum(q, k, "... seq_q d_k, ... seq_k d_k -> ... seq_q seq_k")
+    d_k = q.size(-1)
+    inner = qk / math.sqrt(d_k)
+    # The -floatinf already applies to the actual values here
+    masked_inner = torch.where(mask, inner, -float('inf'))
+    attention_weights = softmax(masked_inner, dim=-1)
+    final_prod = einsum(attention_weights, v, "... seq_q seq_k, ... seq_k d_v -> ... seq_q d_v")
+    return final_prod
+
+# 3.4.5 Causal Multi Head Self Attention
+
+class CausalMHA(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=None, device=None, dtype=None):
+        super().__init__()
+
+        self.d_model = d_model
+    
+        self.d_k = d_model // num_heads
+
+        self.num_heads = num_heads
+        # Input to the linear projection is a vector of size d_model
+        # Output of the linear projection is a vector of size d_k
+        self.Wq = Linear(self.d_model, num_heads * self.d_k, device=device, dtype=dtype)
+        self.Wk = Linear(self.d_model, num_heads * self.d_k, device=device, dtype=dtype)
+        self.Wv = Linear(self.d_model, num_heads * self.d_k, device=device, dtype=dtype)
+        self.Wo = Linear(num_heads * self.d_k, self.d_model, device=device, dtype=dtype)
+        
+        # RoPE
+        if max_seq_len is not None and theta is not None:
+            self.rope = RotaryPositionalEmbedding(theta = theta, d_k = self.d_k, max_seq_len = max_seq_len, device=device)
+        else:
+            self.rope=None
+
+
+    # tensor x is passing through the model! :D
+    def forward(self, x: torch.Tensor, token_pos=None):
+        seq =x.shape[-2]
+        # Forward pass thru
+        Q = self.Wq(x)
+        K = self.Wk(x)
+        V = self.Wv(x)
+
+        # Then we want to split this up by head
+        # Note that we swap num_heads to be before so it can be a batch dimension since the last two dimensions for 
+        # our attention computation should always be seq, d_k and num_heads should be a batch dim
+        Q = rearrange(Q, "... seq (num_heads d_k) -> ... num_heads seq d_k", num_heads = self.num_heads)
+        V = rearrange(V, "... seq (num_heads d_k) -> ... num_heads seq d_k", num_heads = self.num_heads)
+        K = rearrange(K, "... seq (num_heads d_k) -> ... num_heads seq d_k", num_heads = self.num_heads)
+
+        # Now we have to create a mask which is going to be a diagonal one
+        mask = ~torch.triu(torch.ones(seq, seq, dtype=torch.bool, device=x.device), diagonal=1)
+
+        # Apply RoPE
+        # Token position just 0 to seq_len -1
+        
+        if self.rope is not None:
+            if token_pos is None:
+                token_pos = torch.arange(seq, device=x.device)
+            Q = self.rope(Q, token_pos)
+            K = self.rope(K, token_pos)
+
+        output = scaled_dot_product_attention(Q, K, V, mask)
+
+        # Merge all the heads back together
+        output = rearrange(output, "... num_heads seq d_k -> ... seq (num_heads d_k)")
+
+        output = self.Wo(output)
+
+        return output
+        
+
+
+

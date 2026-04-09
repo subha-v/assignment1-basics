@@ -113,7 +113,8 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    from transformer.transformer import scaled_dot_product_attention
+    return scaled_dot_product_attention(Q, K, V, mask=mask)
 
 
 def run_multihead_self_attention(
@@ -147,7 +148,13 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from transformer.transformer import CausalMHA
+    mha = CausalMHA(d_model=d_model, num_heads=num_heads)
+    mha.Wq.load_state_dict({"weights": q_proj_weight})
+    mha.Wk.load_state_dict({"weights": k_proj_weight})
+    mha.Wv.load_state_dict({"weights": v_proj_weight})
+    mha.Wo.load_state_dict({"weights": o_proj_weight})
+    return mha(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -187,7 +194,13 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from transformer.transformer import CausalMHA
+    mha = CausalMHA(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, theta=theta)
+    mha.Wq.load_state_dict({"weights": q_proj_weight})
+    mha.Wk.load_state_dict({"weights": k_proj_weight})
+    mha.Wv.load_state_dict({"weights": v_proj_weight})
+    mha.Wo.load_state_dict({"weights": o_proj_weight})
+    return mha(in_features, token_pos=token_positions)
 
 
 def run_rope(
@@ -446,7 +459,8 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    from transformer.transformer import softmax
+    return softmax(in_features, dim=dim)
 
 
 def run_cross_entropy(
