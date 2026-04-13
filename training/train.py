@@ -14,8 +14,19 @@ def data_loader(x, batch_size, context_length, device_string) -> tuple[torch.Ten
 
 # 5.2 Checkpointing
 def save_checkpoint(model, optimizer, iteration, out):
-    pass
+    # Returns a dict like mapping of param names to tensors
+    model_dict = model.state_dict() 
+    optimizer_dict = optimizer.state_dict()
+    entire_dict = {"model": model_dict, "optimizer": optimizer_dict, "iteration": iteration}
+    torch.save(entire_dict, out)
 
-def load_checkpoint(src, model, optimiezr):
-    pass
+def load_checkpoint(src, model, optimizer):
+    entire_dict = torch.load(src)
+    model.load_state_dict(entire_dict["model"])
+    optimizer.load_state_dict(entire_dict["optimizer"])
+    iteration = entire_dict["iteration"]
+    return iteration
 
+
+# 5.3 Training Together
+def training_loop()
