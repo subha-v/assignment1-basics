@@ -1,0 +1,43 @@
+model:
+  vocab_size: 10000
+  context_length: 256
+  d_model: 512
+  num_layers: 4
+  num_heads: 16
+  d_ff: 1344
+  rope_theta: 10000
+
+optimizer:
+  lr_max: 3.0e-4
+  lr_min: 3.0e-5
+  warmup_iters: 200
+  cosine_cycle_iters: 5000
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  grad_clip: 1.0
+
+training:
+  batch_size: 256
+  total_iters: 5000
+  eval_interval: 250
+  eval_iters: 50
+  log_interval: 10
+  checkpoint_interval: 1000
+
+data:
+  train_path: data/tinystories_train.bin
+  val_path: data/tinystories_val.bin
+  dtype: uint16
+
+logging:
+  wandb_project: cs336-a1
+  wandb_entity: bryandong24-stanford-university
+  wandb_run_name: baseline
+  checkpoint_dir: checkpoints/baseline
+
+system:
+  device: cuda
+  dtype: bfloat16
+  seed: 0
+  resume_from: null

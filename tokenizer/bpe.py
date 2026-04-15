@@ -1,39 +1,9 @@
 import regex as re
-import heapq
 import time
 import os
-import tracemalloc
 from multiprocessing import Pool, cpu_count
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-
-
-def getMemoryUsageMB():
-    currentMemory, peakMemory = tracemalloc.get_traced_memory()
-    return currentMemory / (1024 * 1024), peakMemory / (1024 * 1024)
-
-
-def getRSSMemoryMB():
-    import resource
-    rusage = resource.getrusage(resource.RUSAGE_SELF)
-    return rusage.ru_maxrss / (1024 * 1024)
-
-
-def logProgress(message):
-    currentMB, peakMB = getMemoryUsageMB()
-    print(f"[{time.strftime('%H:%M:%S')}] {message} | RAM: {currentMB:.0f} MB (peak: {peakMB:.0f} MB)", flush=True)
-
-
-class ReversedPair:
-    def __init__(self, pair):
-        self.pair = pair
-
-    def __lt__(self, other):
-        return self.pair > other.pair
-
-    def __eq__(self, other):
-        return self.pair == other.pair
-
 
 def countPreTokensInChunk(textChunk):
     localCounts = {}
@@ -57,7 +27,7 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
 
     fileSizeBytes = os.path.getsize(input_path)
     fileSizeMB = fileSizeBytes / (1024 * 1024)
-    logProgress(f"Starting pre-tokenization of {input_path} ({fileSizeMB:.0f} MB) with {numWorkers} workers")
+    print(f"Starting pre-tokenization of {input_path} ({fileSizeMB:.0f} MB) with {numWorkers} workers", flush=True)
     preTokenStartTime = time.time()
     bytesProcessed = 0
     chunkNumber = 0
@@ -105,16 +75,16 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
             chunkNumber += 1
             bytesProcessed += len(processableText.encode("utf-8"))
             percentDone = (bytesProcessed / fileSizeBytes) * 100
-            logProgress(f"Pre-tokenization chunk {chunkNumber}: {percentDone:.1f}% done ({bytesProcessed / (1024*1024):.0f}/{fileSizeMB:.0f} MB)")
+            print(f"Pre-tokenization chunk {chunkNumber}: {percentDone:.1f}% done ({bytesProcessed / (1024*1024):.0f}/{fileSizeMB:.0f} MB)", flush=True)
 
     preTokenElapsed = time.time() - preTokenStartTime
-    logProgress(f"Pre-tokenization complete in {preTokenElapsed:.1f}s | {len(pre_token_counts)} unique pre-tokens")
+    print(f"Pre-tokenization complete in {preTokenElapsed:.1f}s | {len(pre_token_counts)} unique pre-tokens", flush=True)
 
     wordList = []
     for tokenSequence, frequency in pre_token_counts.items():
         wordList.append((list(tokenSequence), frequency))
 
-    logProgress(f"Building initial pair frequencies from {len(wordList)} words")
+    print(f"Building initial pair frequencies from {len(wordList)} words", flush=True)
     pairFrequencies = {}
     pairToWordIndices = {}
 
@@ -126,35 +96,19 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
                 pairToWordIndices[currentPair] = set()
             pairToWordIndices[currentPair].add(wordIndex)
 
-    logProgress(f"Initial pair frequencies built: {len(pairFrequencies)} unique pairs")
-
-    maxHeap = []
-    for pair, count in pairFrequencies.items():
-        heapq.heappush(maxHeap, (-count, ReversedPair(pair)))
+    print(f"Initial pair frequencies built: {len(pairFrequencies)} unique pairs", flush=True)
 
     merges = []
     numberOfMerges = vocab_size - 256 - len(special_tokens)
     mergeStartTime = time.time()
 
-    logProgress(f"Starting {numberOfMerges} merges")
+    print(f"Starting {numberOfMerges} merges", flush=True)
 
     for mergeIndex in range(numberOfMerges):
-        bestPair = None
-        while maxHeap:
-            negativeCount, reversedCandidate = heapq.heappop(maxHeap)
-            candidatePair = reversedCandidate.pair
-            actualCount = pairFrequencies.get(candidatePair, 0)
-            if actualCount <= 0:
-                pairFrequencies.pop(candidatePair, None)
-                continue
-            if actualCount != -negativeCount:
-                heapq.heappush(maxHeap, (-actualCount, ReversedPair(candidatePair)))
-                continue
-            bestPair = candidatePair
+        if not pairFrequencies:
             break
 
-        if bestPair is None:
-            break
+        bestPair = max(pairFrequencies, key=lambda p: (pairFrequencies[p], p))
 
         merges.append(bestPair)
         mergedToken = bestPair[0] + bestPair[1]
@@ -166,36 +120,54 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
         for wordIndex in affectedWordIndices:
             sequence, frequency = wordList[wordIndex]
 
-            for i in range(len(sequence) - 1):
-                oldPair = (sequence[i], sequence[i + 1])
-                if oldPair == bestPair:
-                    continue
-                pairFrequencies[oldPair] = pairFrequencies.get(oldPair, 0) - frequency
-                if oldPair in pairToWordIndices:
-                    pairToWordIndices[oldPair].discard(wordIndex)
-
+            # Build new sequence and find merge positions in one pass
             newSequence = []
+            mergePositionsOld = []
+            newMergedPositions = []
             i = 0
             while i < len(sequence):
-                isPairMatch = (
-                    i < len(sequence) - 1
-                    and sequence[i] == bestPair[0]
-                    and sequence[i + 1] == bestPair[1]
-                )
-                if isPairMatch:
+                if i < len(sequence) - 1 and sequence[i] == bestPair[0] and sequence[i + 1] == bestPair[1]:
+                    mergePositionsOld.append(i)
+                    newMergedPositions.append(len(newSequence))
                     newSequence.append(mergedToken)
                     i += 2
                 else:
                     newSequence.append(sequence[i])
                     i += 1
 
-            for i in range(len(newSequence) - 1):
-                newPair = (newSequence[i], newSequence[i + 1])
+            if not mergePositionsOld:
+                continue
+
+            # Decrement only neighbor pairs of merge sites in old sequence
+            decrementPositions = set()
+            for pos in mergePositionsOld:
+                if pos > 0:
+                    decrementPositions.add(pos - 1)
+                if pos + 2 < len(sequence):
+                    decrementPositions.add(pos + 1)
+
+            for pos in decrementPositions:
+                oldPair = (sequence[pos], sequence[pos + 1])
+                if oldPair == bestPair:
+                    continue
+                pairFrequencies[oldPair] = pairFrequencies.get(oldPair, 0) - frequency
+                if pairFrequencies[oldPair] <= 0:
+                    del pairFrequencies[oldPair]
+
+            # Increment only neighbor pairs of merged tokens in new sequence
+            incrementPositions = set()
+            for j in newMergedPositions:
+                if j > 0:
+                    incrementPositions.add(j - 1)
+                if j + 1 < len(newSequence):
+                    incrementPositions.add(j)
+
+            for pos in incrementPositions:
+                newPair = (newSequence[pos], newSequence[pos + 1])
                 pairFrequencies[newPair] = pairFrequencies.get(newPair, 0) + frequency
                 if newPair not in pairToWordIndices:
                     pairToWordIndices[newPair] = set()
                 pairToWordIndices[newPair].add(wordIndex)
-                heapq.heappush(maxHeap, (-pairFrequencies[newPair], ReversedPair(newPair)))
 
             wordList[wordIndex] = (newSequence, frequency)
 
@@ -205,16 +177,17 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
             estimatedRemainingSeconds = (numberOfMerges - mergeIndex - 1) / mergesPerSecond if mergesPerSecond > 0 else 0
             estimatedRemainingHours = estimatedRemainingSeconds / 3600
             totalElapsedHours = (time.time() - preTokenStartTime) / 3600
-            logProgress(
+            print(
                 f"Merge {mergeIndex + 1}/{numberOfMerges} "
                 f"({(mergeIndex + 1) / numberOfMerges * 100:.1f}%) | "
                 f"{mergesPerSecond:.1f} merges/s | "
                 f"ETA: {estimatedRemainingHours:.2f}h | "
-                f"Total elapsed: {totalElapsedHours:.2f}h"
+                f"Total elapsed: {totalElapsedHours:.2f}h",
+                flush=True
             )
 
     totalTime = time.time() - preTokenStartTime
-    logProgress(f"Training complete! Total time: {totalTime / 3600:.2f} hours ({totalTime:.0f}s)")
+    print(f"Training complete! Total time: {totalTime / 3600:.2f} hours ({totalTime:.0f}s)", flush=True)
 
     return vocab, merges
 
@@ -222,7 +195,6 @@ def bpe_tokenize(input_path, vocab_size, special_tokens):
 if __name__ == "__main__":
     import sys
     import json
-    import resource
 
     dataset = sys.argv[1] if len(sys.argv) > 1 else "tinystories"
 
@@ -237,9 +209,6 @@ if __name__ == "__main__":
 
     specialTokens = ["<|endoftext|>"]
 
-    tracemalloc.start()
-    startTime = time.time()
-
     print("=" * 60, flush=True)
     print(f"BPE Training: dataset={dataset}, vocab_size={vocabSize}", flush=True)
     print(f"Input: {inputPath}", flush=True)
@@ -248,23 +217,9 @@ if __name__ == "__main__":
 
     trainedVocab, trainedMerges = bpe_tokenize(inputPath, vocabSize, specialTokens)
 
-    elapsedTime = time.time() - startTime
-    currentMemory, peakMemory = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
-    import platform
-    rssMaxRSS = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if platform.system() == "Darwin":
-        rssMemoryGB = rssMaxRSS / (1024 * 1024 * 1024)
-    else:
-        rssMemoryGB = rssMaxRSS / (1024 * 1024)
-
     print(f"\n{'=' * 60}", flush=True)
     print("RESULTS", flush=True)
     print("=" * 60, flush=True)
-    print(f"Training time: {elapsedTime:.1f} seconds ({elapsedTime / 3600:.2f} hours)", flush=True)
-    print(f"Peak traced memory: {peakMemory / (1024 * 1024):.1f} MB ({peakMemory / (1024 * 1024 * 1024):.2f} GB)", flush=True)
-    print(f"Peak RSS memory: {rssMemoryGB:.2f} GB", flush=True)
     print(f"Vocab size: {len(trainedVocab)}", flush=True)
 
     longestToken = max(trainedVocab.values(), key=len)

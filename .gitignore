@@ -163,3 +163,4 @@ cython_debug/
 *.zipdata/
 .venv/
 data/
+uv.lock

@@ -27,6 +27,9 @@ class Tokenizer:
         for rank, (tokenA, tokenB) in enumerate(self.merges):
             self.mergeRanks[(tokenA, tokenB)] = rank
 
+        # cache of all the tokens
+        self.preTokenCache = {}
+
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
         with open(vocab_filepath, "r") as f:
@@ -37,12 +40,13 @@ class Tokenizer:
             vocab[int(tokenIdStr)] = bytes(byteValues)
 
         merges = []
+        bytesPattern = re.compile(r'''b'(?:[^'\\]|\\.)*'|b"(?:[^"\\]|\\.)*"''')
         with open(merges_filepath, "r") as f:
             for line in f:
                 line = line.rstrip("\n")
-                splitIndex = line.index(" b'", 1)
-                tokenA = ast.literal_eval(line[:splitIndex])
-                tokenB = ast.literal_eval(line[splitIndex + 1:])
+                matches = bytesPattern.findall(line)
+                tokenA = ast.literal_eval(matches[0])
+                tokenB = ast.literal_eval(matches[1])
                 merges.append((tokenA, tokenB))
 
         return cls(vocab, merges, special_tokens)
@@ -69,9 +73,30 @@ class Tokenizer:
                 continue
 
             for match in re.finditer(PAT, segment):
-                preToken = [bytes([b]) for b in match.group().encode("utf-8")]
+                preTokenBytes = match.group().encode("utf-8")
 
-                for mergeA, mergeB in self.merges:
+                if preTokenBytes in self.preTokenCache:
+                    for tokenId in self.preTokenCache[preTokenBytes]:
+                        tokenIds.append(tokenId)
+                    continue
+
+                preToken = [bytes([b]) for b in preTokenBytes]
+
+                while True:
+                    bestRank = None
+                    bestPair = None
+                    for i in range(len(preToken) - 1):
+                        pair = (preToken[i], preToken[i + 1])
+                        if pair in self.mergeRanks:
+                            rank = self.mergeRanks[pair]
+                            if bestRank is None or rank < bestRank:
+                                bestRank = rank
+                                bestPair = pair
+
+                    if bestPair is None:
+                        break
+
+                    mergeA, mergeB = bestPair
                     newPreToken = []
                     i = 0
                     while i < len(preToken):
@@ -83,8 +108,14 @@ class Tokenizer:
                             i += 1
                     preToken = newPreToken
 
+                preTokenIds = []
                 for token in preToken:
-                    tokenIds.append(self.invertedVocab[token])
+                    preTokenIds.append(self.invertedVocab[token])
+
+                self.preTokenCache[preTokenBytes] = preTokenIds
+
+                for tokenId in preTokenIds:
+                    tokenIds.append(tokenId)
 
         return tokenIds
 

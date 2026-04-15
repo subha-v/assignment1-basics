@@ -72,8 +72,8 @@ class RotaryPositionalEmbedding(nn.Module):
         # Essentially we are telling them the last dimension is a tensor of pairs so that's why we're explicitly
         # saying '2' here and then we tell them what d_k_half is in terms of d_k
         x_split = rearrange(x, "... (d_k_half two) -> ... d_k_half two", d_k_half=self.d_k // 2, two=2)
-        cosine = self.cos[token_positions]
-        sine = self.sin[token_positions]
+        cosine = self.cos[token_positions].to(x.dtype)
+        sine = self.sin[token_positions].to(x.dtype)
         x1 = x_split[..., 0]
         x2 = x_split[..., 1]
 
