@@ -32,9 +32,9 @@ data:
 
 logging:
   wandb_project: cs336-a1
-  wandb_entity: bryandong24-stanford-university
+  wandb_entity: subhavee2
   wandb_run_name: baseline
-  checkpoint_dir: checkpoints/baseline
+  checkpoint_dir: data/checkpoints/baseline
 
 system:
   device: cuda

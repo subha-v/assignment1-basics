@@ -43,6 +43,20 @@ class FFN(nn.Module):
         gatedOutput = siluActivation * w3Output
         return self.w2(gatedOutput)
 
+## NEW SILU ABLATION STUDY
+class SiLU(nn.Module):
+    def __init__(self, d_model, d_ff, device=None, dtype=None):
+        super().__init__()
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+    
+    def forward(self, x):
+        w1Output = self.w1(x)
+        siluActivation = w1Output * torch.sigmoid(w1Output)
+        return self.w2(siluActivation)
+
+
+
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len:int, device=None):
         super().__init__()
@@ -103,7 +117,7 @@ def scaled_dot_product_attention(q: torch.Tensor, k: torch.tensor, v: torch.tens
 # 3.4.5 Causal Multi Head Self Attention
 
 class CausalMHA(torch.nn.Module):
-    def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=None, device=None, dtype=None):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=None, device=None, dtype=None, use_rope = True):
         super().__init__()
 
         self.d_model = d_model
@@ -119,7 +133,7 @@ class CausalMHA(torch.nn.Module):
         self.Wo = Linear(num_heads * self.d_k, self.d_model, device=device, dtype=dtype)
         
         # RoPE
-        if max_seq_len is not None and theta is not None:
+        if use_rope and max_seq_len is not None and theta is not None:
             self.rope = RotaryPositionalEmbedding(theta = theta, d_k = self.d_k, max_seq_len = max_seq_len, device=device)
         else:
             self.rope=None
@@ -164,35 +178,56 @@ class CausalMHA(torch.nn.Module):
 
 class TransformerBlock(torch.nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, eps=1e-5, device=None,
-    dtype=None, max_seq_len=None, theta=None):
+    dtype=None, max_seq_len=None, theta=None, use_rms_norm: bool = True, pre_norm: bool = True, 
+    use_rope: bool = True, use_swiglu: bool=True):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_ff = d_ff
-        self.norm1 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
-        self.norm2 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
-        self.CausalMHA = CausalMHA(d_model = d_model, num_heads = num_heads, max_seq_len = max_seq_len, theta=theta, device=device, dtype=dtype)
-        self.FFN = FFN(d_model, d_ff, device=device, dtype=dtype)
+        self.pre_norm = pre_norm
+        if use_rms_norm:
+            self.norm1 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
+            self.norm2 = RMSNorm(d_model = d_model, eps = eps, device=device, dtype=dtype)
+        else:
+            self.norm1 = nn.Identity()
+            self.norm2 = nn.Identity()
+
+        self.CausalMHA = CausalMHA(d_model = d_model, num_heads = num_heads, max_seq_len = max_seq_len, theta=theta, device=device, dtype=dtype, use_rope=use_rope)
+        if use_swiglu is True:
+            self.FFN = FFN(d_model, d_ff, device=device, dtype=dtype)
+        else:
+            self.FFN = SiLU(d_model, d_ff, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor):
         # Remember that the two norms have different gain parameters so instantiate two of them
-        z = x + self.CausalMHA(self.norm1(x))
-        y = z + self.FFN(self.norm2(z))
+        if self.pre_norm:
+            z = x + self.CausalMHA(self.norm1(x))
+            y = z + self.FFN(self.norm2(z))
+        else:
+            z = self.norm1(x + self.CausalMHA(x))
+            y = self.norm2(z + self.FFN(x))
+
         return y
 
         
 class EntireTransformer(torch.nn.Module):
     def __init__(self, vocab_size: int, context_length: int, num_layers: int,
     d_model: int, num_heads: int, d_ff: int, theta: float,
-    device=None, dtype=None):
+    device=None, dtype=None, use_rms_norm: bool=True, pre_norm: bool = True, 
+    use_rope: bool =True, use_swiglu: bool = True):
         super().__init__()
         self.vocab_size = vocab_size
         self.context_length = context_length
         self.num_layers = num_layers
+        self.pre_norm = pre_norm
         self.token_embeddings = Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=dtype)
-        self.norm = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        if use_rms_norm and pre_norm:
+            self.norm = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        else:
+            self.norm = nn.Identity()
         self.linear = Linear(d_model, vocab_size, device=device, dtype=dtype)
-        self.layers = nn.ModuleList([TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=context_length, theta=theta, device=device, dtype=dtype) for _ in range(num_layers)])
+        self.layers = nn.ModuleList([TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff, max_seq_len=context_length, theta=theta, device=device, dtype=dtype, use_rms_norm =use_rms_norm, 
+        pre_norm=pre_norm, use_rope=use_rope, use_swiglu=use_swiglu) for _ in range(num_layers)])
 
     def forward(self, x: torch.Tensor):
         # Token Embedding

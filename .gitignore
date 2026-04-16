@@ -164,3 +164,7 @@ cython_debug/
 .venv/
 data/
 uv.lock
+
+checkpoints
+
+.DS_Store

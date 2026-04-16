@@ -73,6 +73,10 @@ def training_loop(cfg):
         num_heads=m_cfg["num_heads"],
         d_ff=m_cfg["d_ff"],
         theta=m_cfg["rope_theta"],
+        use_rms_norm = m_cfg.get("use_rms_norm", True),
+        use_swiglu = m_cfg.get("use_swiglu", True),
+        pre_norm=m_cfg.get("pre_norm", True),
+        use_rope=m_cfg.get("use_rope", True),
         device=device,
         dtype=dtype,
     )
