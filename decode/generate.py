@@ -6,10 +6,16 @@ from tokenizer.tokenizer import Tokenizer
 from transformer.transformer import EntireTransformer
 
 
+# config_path = "training/configs/baseline.yaml"
+# checkpoint_path = "checkpoints/bs_256/ckpt_final.pt"
+# vocab_path = "data/ts_vocab.json"
+# merges_path = "data/ts_merges.txt"
+# prompt = "Kaitlyn was playing clash royale and then"
+
 config_path = "training/configs/baseline.yaml"
-checkpoint_path = "checkpoints/bs_256/ckpt_final.pt"
-vocab_path = "data/ts_vocab.json"
-merges_path = "data/ts_merges.txt"
+checkpoint_path = "checkpoints/owt_lr_1e-03.pt" 
+vocab_path = "data/owt_vocab.json"
+merges_path = "data/owt_merges.txt"
 
 prompt = "Kaitlyn was playing clash royale and then"
 max_new_tokens = 256
@@ -25,6 +31,8 @@ with open(config_path) as f:
     cfg = yaml.safe_load(f)
 
 m_cfg = cfg["model"]
+#updated vocab size for OWT
+m_cfg["vocab_size"] = 32000
 
 torch.manual_seed(seed)
 
